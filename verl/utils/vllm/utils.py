@@ -224,14 +224,16 @@ def resolve_weight_name(model, name: str, model_weight_names: set[str]) -> str:
             cleaf = csegs[-1]
             stem = csegs[:-1]
             # Drop an injected ``base_layer`` so a LoRA-suffixed shard still matches.
+            suffix = []
             if stem and stem[-1] == "base_layer":
+                suffix = ["base_layer"]
                 stem = stem[:-1]
             for owner, shards in packed.items():
                 osegs = owner.split(".")
                 for shard in shards:
                     ssegs = shard.split(".")
                     if len(stem) >= len(ssegs) and stem[-len(ssegs) :] == ssegs:
-                        fused = ".".join(stem[: -len(ssegs)] + osegs + [cleaf])
+                        fused = ".".join(stem[: -len(ssegs)] + osegs + suffix + [cleaf])
                         if fused in model_weight_names:
                             return True
                         if mapper is not None:

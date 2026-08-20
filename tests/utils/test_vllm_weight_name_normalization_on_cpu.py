@@ -410,6 +410,43 @@ def test_suffixed_leaf_is_kept_on_released_vllm():
     assert _resolve(worker, model, name) == name
 
 
+def test_packed_shard_leaf_suffixed_on_strict_released_vllm():
+    """Regression: vLLM 0.24.0 (strict ``params_dict[name]`` loader, no
+    ``BaseLayerWithLoRA.load_weights``) + Llama-arch + merge=False LoRA. The
+    Bridge exports the *shard* leaf (``gate_proj``/``q_proj``); vLLM's
+    ``stacked_params_mapping`` fuses it to the packed owner
+    (``gate_up_proj``/``qkv_proj``) and indexes ``params_dict`` *after* the
+    rewrite. The live param lives under ``.base_layer.`` (LoRA-wrapped), so the
+    shard leaf must be suffixed before vLLM fuses it -- otherwise the fused name
+    ``gate_up_proj.weight`` (no ``.base_layer``) KeyErrors. The packed-owner
+    lookup must probe the wrapped form (``gate_up_proj.base_layer.weight``),
+    not just the bare owner."""
+    # _HAS_LORA_LOAD_WEIGHTS is False by default (released vLLM); _strict_outer
+    # gives a strict inner loader (params_dict[name], no AutoWeightsLoader).
+    model = _strict_outer(
+        {
+            "layers.0.self_attn.qkv_proj.base_layer.weight": torch.empty(0),
+            "layers.0.mlp.gate_up_proj.base_layer.weight": torch.empty(0),
+        }
+    )
+    model.packed_modules_mapping = {
+        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
+        "gate_up_proj": ["gate_proj", "up_proj"],
+    }
+    worker = _make_worker(model)
+
+    # Shard leaves (what the Bridge exports) -> suffixed so vLLM fuses to the
+    # wrapped owner key.
+    assert _resolve(worker, model, "layers.0.mlp.gate_proj.weight") == ("layers.0.mlp.gate_proj.base_layer.weight")
+    assert _resolve(worker, model, "layers.0.self_attn.q_proj.weight") == (
+        "layers.0.self_attn.q_proj.base_layer.weight"
+    )
+    # Owner leaves are suffixed directly.
+    assert _resolve(worker, model, "layers.0.mlp.gate_up_proj.weight") == (
+        "layers.0.mlp.gate_up_proj.base_layer.weight"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Non-leaf fused-MoE expert alias: strip Bridge-inserted .base_layer.
 # ---------------------------------------------------------------------------

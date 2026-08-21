@@ -70,6 +70,24 @@ class TestReduceMetrics(unittest.TestCase):
 
         self.assertEqual(result["single"], 5.0)
 
+    def test_reduce_metrics_min_max_substring_false_positive(self):
+        """Regression test (#1508): keys that merely *contain* "min"/"max" as a substring of an
+        unrelated token (e.g. "minibatch", "maximum") must NOT be routed to np.min/np.max - only a
+        standalone "min"/"max" token (delimited by "/" or "_") should trigger that reduction.
+        """
+        metrics = {
+            "actor/minibatch_loss": [1.0, 2.0, 3.0],  # contains "min" as a substring, not a token
+            "actor/maximum_length": [10.0, 20.0, 30.0],  # contains "max" as a substring, not a token
+            "actor/loss_min": [1.0, 2.0, 3.0],  # "min" is a standalone token -> still np.min
+            "actor/loss_max": [1.0, 2.0, 3.0],  # "max" is a standalone token -> still np.max
+        }
+        result = reduce_metrics(metrics)
+
+        self.assertEqual(result["actor/minibatch_loss"], 2.0)  # mean, not min
+        self.assertEqual(result["actor/maximum_length"], 20.0)  # mean, not max
+        self.assertEqual(result["actor/loss_min"], 1.0)
+        self.assertEqual(result["actor/loss_max"], 3.0)
+
 
 class TestMetric(unittest.TestCase):
     """Tests for the Metric class."""
@@ -287,6 +305,151 @@ class TestMetric(unittest.TestCase):
 
         self.assertEqual(result["custom_metric"], 2.0)
         self.assertEqual(result["list_metric"], 5.0)
+
+    def test_weighted_mean_matches_hand_computed_value(self):
+        """Weighted MEAN aggregate() should match a hand-computed weighted mean."""
+        # value=1.0 backed by 10 samples, value=3.0 backed by 30 samples
+        metric = Metric(aggregation="mean", value=[1.0, 3.0], weight=[10.0, 30.0])
+
+        expected = (1.0 * 10.0 + 3.0 * 30.0) / (10.0 + 30.0)  # = 2.5
+        self.assertAlmostEqual(metric.aggregate(), expected)
+        self.assertAlmostEqual(metric.aggregate(), 2.5)
+
+    def test_weighted_mean_with_unit_weights_matches_plain_mean(self):
+        """Byte-for-byte backward compatibility: weight=1.0 (explicit or omitted) must reduce to
+        exactly today's np.mean result.
+        """
+        values = [1.0, 2.0, 3.0, 4.0, 7.0]
+
+        unweighted = Metric(aggregation="mean")
+        unweighted.extend(values)
+
+        explicitly_weighted = Metric(aggregation="mean", value=values, weight=[1.0] * len(values))
+
+        self.assertEqual(unweighted.aggregate(), np.mean(values))
+        self.assertEqual(explicitly_weighted.aggregate(), np.mean(values))
+        self.assertEqual(explicitly_weighted.aggregate(), unweighted.aggregate())
+
+    def test_weighted_sum_scales_by_weight(self):
+        """Weighted SUM should compute sum(value * weight)."""
+        metric = Metric(aggregation="sum", value=[2.0, 3.0], weight=[5.0, 10.0])
+
+        self.assertAlmostEqual(metric.aggregate(), 2.0 * 5.0 + 3.0 * 10.0)  # 70.0
+
+    def test_weighted_sum_with_unit_weights_matches_plain_sum(self):
+        """Weighted SUM with unit weights must match today's exact np.sum result."""
+        values = [1.0, 2.0, 3.0, 4.0]
+
+        unweighted = Metric(aggregation="sum")
+        unweighted.extend(values)
+
+        self.assertEqual(unweighted.aggregate(), np.sum(values))
+
+    def test_append_with_weight(self):
+        """Test appending a value together with an explicit weight."""
+        metric = Metric(aggregation="mean")
+        metric.append(1.0, weight=2.0)
+        metric.append(3.0, weight=6.0)
+
+        self.assertEqual(metric.values, [1.0, 3.0])
+        self.assertEqual(metric.weights, [2.0, 6.0])
+        self.assertAlmostEqual(metric.aggregate(), (1.0 * 2.0 + 3.0 * 6.0) / (2.0 + 6.0))
+
+    def test_append_without_weight_defaults_to_one(self):
+        """Test that omitting weight defaults every value's weight to 1.0."""
+        metric = Metric(aggregation="mean")
+        metric.append(1.0)
+        metric.append(2.0)
+
+        self.assertEqual(metric.weights, [1.0, 1.0])
+
+    def test_extend_with_scalar_weight_broadcasts(self):
+        """Test that a single scalar weight passed to extend() applies to every value."""
+        metric = Metric(aggregation="mean")
+        metric.extend([1.0, 2.0, 3.0], weights=4.0)
+
+        self.assertEqual(metric.weights, [4.0, 4.0, 4.0])
+
+    def test_extend_weights_length_mismatch_raises(self):
+        """Test that extend raises when weights and values have different lengths."""
+        metric = Metric(aggregation="mean")
+        with self.assertRaises(ValueError):
+            metric.extend([1.0, 2.0, 3.0], weights=[1.0, 2.0])
+
+    def test_extend_with_weighted_metric_preserves_weights(self):
+        """Test that extending with another (weighted) Metric carries its weights over."""
+        source = Metric(aggregation="mean", value=[1.0, 2.0], weight=[10.0, 20.0])
+
+        target = Metric(aggregation="mean")
+        target.extend(source)
+
+        self.assertEqual(target.values, [1.0, 2.0])
+        self.assertEqual(target.weights, [10.0, 20.0])
+
+    def test_aggregate_dp_weighted_unequal_rank_counts(self):
+        """Weighted aggregate_dp across DP ranks with unequal sample counts should give the
+        mathematically correct combined mean, computed by flattening every raw sample and taking
+        one true mean - not the naive unweighted mean-of-per-rank-means, which is visibly wrong
+        when ranks are unequal in size.
+        """
+        # Rank 0 has 90 samples averaging to 0.0; rank 1 has only 10 samples averaging to 10.0.
+        rank0_values = [0.0] * 90
+        rank1_values = [10.0] * 10
+        rank_sample_counts = [len(rank0_values), len(rank1_values)]  # [90, 10]
+
+        # Ground truth: flatten all raw per-sample values and take one true mean.
+        ground_truth = np.mean(rank0_values + rank1_values)  # = 1.0
+        self.assertAlmostEqual(ground_truth, 1.0)
+
+        metric0 = Metric(aggregation="mean", value=np.mean(rank0_values))
+        metric1 = Metric(aggregation="mean", value=np.mean(rank1_values))
+
+        # The naive unweighted mean-of-means is visibly wrong (treats both ranks as equal size).
+        naive_unweighted = Metric.aggregate_dp([metric0, metric1])
+        self.assertAlmostEqual(naive_unweighted, 5.0)
+        self.assertNotAlmostEqual(naive_unweighted, ground_truth)
+
+        # The sample-count-weighted result matches the ground truth.
+        weighted = Metric.aggregate_dp([metric0, metric1], weights=rank_sample_counts)
+        self.assertAlmostEqual(weighted, ground_truth)
+        self.assertAlmostEqual(weighted, 1.0)
+
+    def test_aggregate_dp_weighted_multiple_grad_accum_steps(self):
+        """Weighted aggregate_dp should apply the same per-rank weight across every
+        gradient-accumulation position when ranks hold multiple values.
+        """
+        metric0 = Metric(aggregation="mean")
+        metric0.extend([0.0, 0.0])  # rank 0: 2 grad-accum steps
+
+        metric1 = Metric(aggregation="mean")
+        metric1.extend([10.0, 20.0])  # rank 1: 2 grad-accum steps
+
+        # rank 0 has 90 samples, rank 1 has only 10 samples
+        weighted = Metric.aggregate_dp([metric0, metric1], weights=[90, 10])
+
+        # per grad-accum position: weighted avg of [0.0, 10.0] w=[90,10] -> 1.0
+        #                          weighted avg of [0.0, 20.0] w=[90,10] -> 2.0
+        # then mean over the two positions -> 1.5
+        self.assertAlmostEqual(weighted, 1.5)
+
+    def test_aggregate_dp_weights_length_mismatch_raises(self):
+        """Test that aggregate_dp raises when weights don't have one entry per rank."""
+        metric1 = Metric(aggregation="mean", value=1.0)
+        metric2 = Metric(aggregation="mean", value=2.0)
+
+        with self.assertRaises(ValueError):
+            Metric.aggregate_dp([metric1, metric2], weights=[1.0])
+
+    def test_aggregate_dp_unweighted_still_matches_plain_mean(self):
+        """Backward compatibility: aggregate_dp without weights must be unchanged."""
+        metric1 = Metric(aggregation="mean")
+        metric1.extend([1.0, 2.0])
+
+        metric2 = Metric(aggregation="mean")
+        metric2.extend([3.0, 4.0])
+
+        result = Metric.aggregate_dp([metric1, metric2])
+        self.assertEqual(result, 2.5)
 
 
 class TestComputeDataMetrics(unittest.TestCase):

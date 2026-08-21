@@ -390,6 +390,26 @@ class vLLMHttpServer:
                     "data_parallel_rpc_port": self._dp_rpc_port,
                 }
             )
+        else:
+            # Single-node vLLM uses v1's MultiprocExecutor, which does NOT accept an
+            # externally supplied port: it picks its own local torch.distributed.
+            # init_process_group port via vllm.utils.network_utils.get_open_port(),
+            # which binds a throwaway socket, reads the OS-assigned port, and releases
+            # it *before* the port is actually bound by the TCPStore. Two rollout
+            # engines started on the same node can both land in that gap and pick the
+            # same port, failing with EADDRINUSE (verl-project/verl#6677).
+            #
+            # get_open_port() does honor the VLLM_PORT env var as the port to bind
+            # (see vllm.utils.network_utils._get_open_port), so we can still forward
+            # our own race-safe reservation -- just through the env var instead of a
+            # CLI/engine arg. We must release the reservation socket right before
+            # vLLM (re)binds it: unlike torch's TCPStore listener, vLLM's bind check
+            # does not set SO_REUSEADDR, so holding the socket open would make it
+            # skip past our reserved port instead of reusing it.
+            if self._master_sock is not None:
+                self._master_sock.close()
+                self._master_sock = None
+            os.environ["VLLM_PORT"] = str(self._master_port)
 
         # update lora-related args
         lora_rank = self.model_config.lora.get("rank", 0)

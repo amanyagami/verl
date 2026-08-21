@@ -92,9 +92,12 @@ This logic is largely copied from the Hendrycks' MATH release (math_equivalence)
 - https://github.com/openai/prm800k
 """
 
+import ast
+import builtins
 import contextlib
 import math
 import re
+import types
 from math import isclose
 
 # sympy related
@@ -104,6 +107,115 @@ from sympy.parsing.sympy_parser import parse_expr
 
 # verl related
 from verl.utils.py_functional import timeout_limit
+
+# ---------------------------------------------------------------------------
+# Security hardening (verl-project/verl#5331 - "Critical Security
+# Vulnerabilities in Mathematical Evaluation and Serialization Code").
+#
+# `prediction` (and, to a lesser extent, `reference`) strings handled by this
+# module originate from the policy model's own generated completion text,
+# which is graded as part of the RL reward computation on *every* rollout.
+# The original implementation called Python's builtin eval() directly on
+# that text in a couple of places, which is a straightforward
+# arbitrary-code-execution vector (e.g. a completion containing
+# "__import__('os').system(...)" as part of its "answer").
+#
+# sympy.parsing.sympy_parser.parse_expr() is NOT a safe drop-in replacement
+# for eval() by itself: its own docstring warns "this function uses eval,
+# and thus shouldn't be used on unsanitized input". By default
+# (global_dict=None) it even copies every Python builtin function --
+# including __import__, eval, exec, open, compile, ... -- into the
+# namespace it evaluates against, so
+# `parse_expr("__import__('os').system(...)")` executes just as readily as
+# a bare eval() call would (verified while writing this patch). The helpers
+# below build a namespace that keeps sympy's own names (so numeric/symbolic
+# parsing keeps working exactly as before) but omits the dangerous
+# builtins, and separately validate the input before parsing.
+#
+# Note that removing dangerous builtins still cannot, by itself, stop
+# "sandbox escape via live object-graph traversal" tricks such as
+# `[].__class__.__base__.__subclasses__()` (walking the object graph this
+# way needs no builtin function name at all). `handle_pi()` is fully immune
+# to this because it is only ever handed a strictly-validated arithmetic
+# expression (see `_safe_parse_expr`). For the general-purpose symbolic
+# parsing elsewhere in this module we additionally reject any expression
+# containing "__", which blocks the concrete gadget above (no legitimate
+# LaTeX-derived math expression needs a double underscore); a fully
+# rigorous fix for arbitrary untrusted symbolic input would require running
+# the parser in a real sandbox (subprocess / restricted syscalls) rather
+# than namespace or string filtering.
+# ---------------------------------------------------------------------------
+
+_DANGEROUS_BUILTIN_NAMES = frozenset(
+    {
+        "__import__",
+        "__build_class__",
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "input",
+        "breakpoint",
+        "globals",
+        "locals",
+        "vars",
+        "getattr",
+        "setattr",
+        "delattr",
+        "help",
+        "exit",
+        "quit",
+        "memoryview",
+    }
+)
+
+_SAFE_ARITHMETIC_EXPR_RE = re.compile(r"^[\d\s+\-*/().eE]+$")
+
+
+def _safe_sympy_global_dict() -> dict:
+    """Namespace for ``parse_expr`` that mirrors its own default namespace
+    (``global_dict=None``), except that it omits builtins with no
+    legitimate use in a math expression that are the standard vector for
+    turning an expression parser into arbitrary code execution.
+    """
+    global_dict: dict = {}
+    exec("from sympy import *", global_dict)  # trusted, fixed source string
+    for name, obj in vars(builtins).items():
+        if name in _DANGEROUS_BUILTIN_NAMES:
+            continue
+        if isinstance(obj, types.BuiltinFunctionType):
+            global_dict[name] = obj
+    global_dict["max"] = global_dict["Max"]
+    global_dict["min"] = global_dict["Min"]
+    global_dict["__builtins__"] = {}
+    return global_dict
+
+
+def _safe_parse_expr(string: str):
+    """Safely evaluate the plain arithmetic expression built by
+    ``handle_pi`` (e.g. ``"2*3.141592653589793"``), replacing the previous
+    ``eval(string)`` call (verl-project/verl#5331). Only a strict allow-list
+    of arithmetic characters is accepted before parsing, which -- unlike a
+    bare/naive ``parse_expr()`` call -- also closes the object-graph
+    traversal gadgets described above.
+    """
+    if not _SAFE_ARITHMETIC_EXPR_RE.match(string):
+        raise ValueError(f"refusing to evaluate non-arithmetic expression: {string!r}")
+    return parse_expr(string, global_dict=_safe_sympy_global_dict(), evaluate=True)
+
+
+def _safe_symbolic_parse_expr(expr: str):
+    """Parse a general (possibly symbolic) expression through the hardened
+    namespace above (verl-project/verl#5331). Also rejects any expression
+    containing a double underscore, which blocks Python dunder-attribute
+    gadgets such as ``"[].__class__.__base__.__subclasses__()"`` that
+    survive even a builtins-free namespace. This is a pragmatic,
+    defense-in-depth filter -- not a substitute for real sandboxing -- since
+    no legitimate LaTeX-derived math expression needs a double underscore.
+    """
+    if "__" in expr:
+        raise ValueError(f"refusing to evaluate expression containing '__': {expr!r}")
+    return parse_expr(expr, global_dict=_safe_sympy_global_dict())
 
 
 def is_digit(s):
@@ -164,9 +276,21 @@ def handle_pi(string, pi):
             # Find the next occurrence of "\pi"
             idx = string.find("\\pi", idx + 1)
 
-        # Evaluate the expression using eval() function
+        # Evaluate the arithmetic expression. SECURITY (verl-project/verl#5331):
+        # this used to call eval(string) directly on the model's own answer
+        # text, which is arbitrary code execution. _safe_parse_expr() only
+        # accepts a strict arithmetic-character allow-list and evaluates it
+        # through a builtins-free sympy namespace; we only keep the result
+        # when it collapses to a plain number, matching what eval() produced
+        # for the numeric "N*math.pi"-style expressions this function
+        # builds. Any other outcome (validation failing, parsing raising, or
+        # the result not being numeric) leaves `string` as the
+        # substituted-but-unevaluated text, exactly as eval() raising an
+        # exception did before.
         with contextlib.suppress(Exception):
-            string = eval(string)
+            parsed = _safe_parse_expr(string)
+            if parsed.is_number:
+                string = float(parsed)
 
     return string
 
@@ -284,7 +408,11 @@ def math_equal(
     # if reference is a matrix
     if r"\begin{pmatrix}" in reference and prediction.startswith("Matrix"):
         try:
-            pred_matrix = parse_expr(prediction)
+            # SECURITY (verl-project/verl#5331): route through the hardened,
+            # builtins-restricted namespace instead of parse_expr()'s own
+            # (unsafe-by-default) namespace -- see module-level comment above
+            # _safe_sympy_global_dict for why this matters.
+            pred_matrix = _safe_symbolic_parse_expr(prediction)
             ref_matrix_items = reference.split()[1:-1:2]
             if len(pred_matrix) == len(ref_matrix_items) and all(
                 [
@@ -296,9 +424,16 @@ def math_equal(
         except Exception:
             pass
     elif r"\begin{pmatrix}" in reference and prediction.startswith("[") and prediction.endswith("]"):
-        if isinstance(eval(prediction), list):
+        # SECURITY (verl-project/verl#5331): eval(prediction) executed the
+        # model's own answer text as Python code. ast.literal_eval() only
+        # accepts Python literal syntax (lists/tuples/dicts/numbers/strings/
+        # booleans/None) -- it parses "[[1, 2], [3, 4]]" exactly like eval()
+        # did, but it is structurally incapable of calling functions,
+        # importing modules, or evaluating attribute access, so it cannot
+        # execute code.
+        if isinstance(ast.literal_eval(prediction), list):
             try:
-                pred_matrix = eval(prediction)
+                pred_matrix = ast.literal_eval(prediction)
                 # ref_matrix_items = reference.split()[1:-1:2]
                 ref_matrix_items = (
                     reference.removeprefix(r"\\begin{pmatrix}")
@@ -323,7 +458,10 @@ def math_equal(
 
 def symbolic_equal(a, b, tolerance, timeout=10.0):
     def _parse(s):
-        for f in [parse_expr, parse_latex]:
+        # SECURITY (verl-project/verl#5331): route parse_expr through the
+        # hardened namespace (see module-level comment above
+        # _safe_sympy_global_dict) instead of its own unsafe-by-default one.
+        for f in [_safe_symbolic_parse_expr, parse_latex]:
             try:
                 with timeout_limit(seconds=timeout):
                     return f(s)

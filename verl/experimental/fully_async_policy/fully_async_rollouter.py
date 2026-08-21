@@ -839,8 +839,6 @@ class FullyAsyncRollouter(SeparateRayPPOTrainer):
         reward_loop_worker_handles = self.reward_loop_manager.reward_loop_workers if enable_agent_reward_loop else None
 
         # create async rollout manager and request scheduler
-        assert self.config.actor_rollout_ref.rollout.mode == "async"
-
         self.async_rollout_mode = True
         # Use FullyAsyncLLMServerManager for two-phase (hybrid + standalone) init.
         # It creates GlobalRequestLoadBalancer (with merged handle registry) internally.

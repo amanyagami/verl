@@ -135,7 +135,6 @@ params=(
     actor_rollout_ref.actor.megatron.tensor_model_parallel_size=${TRAIN_TP}
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=${TRAIN_PP}
     actor_rollout_ref.rollout.name=vllm
-    actor_rollout_ref.rollout.mode=async
     actor_rollout_ref.rollout.nnodes=1
     actor_rollout_ref.rollout.n_gpus_per_node=${N_GPUS_ROLLOUT}
     actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP}

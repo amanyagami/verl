@@ -93,7 +93,6 @@ common_params=(
     actor_rollout_ref.actor.clip_ratio_low=0.2
     actor_rollout_ref.actor.clip_ratio_high=0.28
     actor_rollout_ref.rollout.name=vllm
-    actor_rollout_ref.rollout.mode=async
     actor_rollout_ref.rollout.nnodes=1
     actor_rollout_ref.rollout.n_gpus_per_node=${N_GPUS_ROLLOUT}
     actor_rollout_ref.rollout.tensor_model_parallel_size=${ROLLOUT_TP}

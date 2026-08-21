@@ -63,7 +63,6 @@ def init_config(n_gpus_per_node) -> DictConfig:
     config.data.train_batch_size = 128
     config.data.return_raw_chat = True
     config.actor_rollout_ref.model.path = "Qwen/Qwen2.5-7B-Instruct"
-    config.actor_rollout_ref.rollout.mode = "async"
     config.actor_rollout_ref.rollout.tensor_model_parallel_size = 2
     config.actor_rollout_ref.rollout.gpu_memory_utilization = 0.9
     config.actor_rollout_ref.rollout.multi_turn.format = "hermes"
@@ -104,9 +103,8 @@ def initialize(config, backend) -> tuple[AgentLoopManager | RayWorkerGroup, Stat
     return server, dataloader
 
 
-def perf_rollout(mode, backend, n_gpus_per_node, num_steps):
+def perf_rollout(backend, n_gpus_per_node, num_steps):
     config = init_config(n_gpus_per_node)
-    config.actor_rollout_ref.rollout.mode = mode
     agent_loop_manager, dataloader = initialize(config, backend)
 
     for step, batch in enumerate(dataloader):
@@ -132,7 +130,6 @@ if __name__ == "__main__":
     num_steps = 1
     n_gpus_per_node = 8
 
-    # test_cases = [("sync", "sync"), ("async", "zeromq"), ("async", "ray")]
-    test_cases = [("async", "zeromq"), ("async", "ray")]
-    for mode, backend in test_cases:
-        perf_rollout(mode=mode, backend=backend, n_gpus_per_node=n_gpus_per_node, num_steps=num_steps)
+    test_cases = ["zeromq", "ray"]
+    for backend in test_cases:
+        perf_rollout(backend=backend, n_gpus_per_node=n_gpus_per_node, num_steps=num_steps)

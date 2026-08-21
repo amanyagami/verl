@@ -16,7 +16,6 @@ ENGINE=${ENGINE:-vllm}
 if [ "$ENGINE" = "vllm" ]; then
     export VLLM_USE_V1=1
 fi
-ROLLOUT_MODE="async"
 
 RETURN_RAW_CHAT="True"
 SKIP_TOKENIZER_INIT="True"
@@ -138,7 +137,6 @@ exp_name="${VERL_EXP_NAME:-$(basename "${MODEL_ID,,}")-function-reward-minimal}"
     actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
     actor_rollout_ref.rollout.name="${ENGINE}" \
-    actor_rollout_ref.rollout.mode="${ROLLOUT_MODE}" \
     actor_rollout_ref.rollout.load_format=${LOAD_FORMAT} \
     actor_rollout_ref.rollout.layered_summon=${LAYERED_SUMMON} \
     actor_rollout_ref.rollout.skip_tokenizer_init="${SKIP_TOKENIZER_INIT}" \

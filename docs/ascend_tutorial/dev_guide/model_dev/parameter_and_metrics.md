@@ -82,7 +82,6 @@ verl 通过层级化的 YAML 配置文件管理所有参数，涉及到的所有
 | 参数名 | 默认值 | 说明 |
 |--------|--------|------|
 | `actor_rollout_ref.rollout.name` | `???` | Rollout 引擎名称，需用户指定 |
-| `actor_rollout_ref.rollout.mode` | `async` | Rollout 模式，可选 async、sync 等 |
 | `actor_rollout_ref.rollout.nnodes` | `0` | Rollout 使用的节点数 |
 | `actor_rollout_ref.rollout.n_gpus_per_node` | 引用自 `trainer.n_gpus_per_node` | 每节点 GPU 数 |
 | `actor_rollout_ref.rollout.temperature` | `1.0` | 采样温度，控制生成随机性 |

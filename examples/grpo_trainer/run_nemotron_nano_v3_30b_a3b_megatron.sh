@@ -153,7 +153,6 @@ ACTOR=(
 
 ROLLOUT=(
     actor_rollout_ref.rollout.name=${rollout_name}
-    actor_rollout_ref.rollout.mode=${rollout_mode}
     actor_rollout_ref.rollout.gpu_memory_utilization=0.70
     actor_rollout_ref.rollout.tensor_model_parallel_size=${gen_tp}
     actor_rollout_ref.rollout.enable_chunked_prefill=True

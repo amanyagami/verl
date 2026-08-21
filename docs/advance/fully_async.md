@@ -311,7 +311,6 @@ python -m verl.experimental.fully_async_policy.fully_async_main \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=${use_dynamic_bsz} \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=${use_dynamic_bsz} \
     actor_rollout_ref.rollout.name=${rollout_name} \
-    actor_rollout_ref.rollout.mode=${rollout_mode} \
     trainer.nnodes="${NNODES_TRAIN}" \
     trainer.n_gpus_per_node="${NGPUS_PER_NODE}" \
     rollout.nnodes="${NNODES_ROLLOUT}" \

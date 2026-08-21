@@ -85,7 +85,6 @@ echo "Total GPUs: ${NUM_GPUS} (shared by training / rollout / reward model)"
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.rollout.name=${rollout_name} \
-    actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \

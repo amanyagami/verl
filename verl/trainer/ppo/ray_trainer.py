@@ -919,7 +919,7 @@ class RayPPOTrainer:
         )
 
         # create async rollout manager and request scheduler
-        # Note: mode is always "async" since sync mode is deprecated
+        # Note: rollout is always run in async mode; sync mode has been removed.
         self.async_rollout_mode = True
 
         # initialize teacher loop manager

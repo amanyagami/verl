@@ -87,7 +87,6 @@ def _make_rollout_config(model_path, seed):
     config.actor_rollout_ref.model.path = model_path
     config.actor_rollout_ref.model.trust_remote_code = True
     config.actor_rollout_ref.rollout.name = "vllm"
-    config.actor_rollout_ref.rollout.mode = "async"
     config.actor_rollout_ref.rollout.tensor_model_parallel_size = 1
     config.actor_rollout_ref.rollout.prompt_length = 128
     config.actor_rollout_ref.rollout.response_length = 256
@@ -124,7 +123,6 @@ def _make_e2e_config(model_path, seed, n_gpus=2):
     config.actor_rollout_ref.model.path = model_path
     config.actor_rollout_ref.model.trust_remote_code = True
     config.actor_rollout_ref.rollout.name = "vllm"
-    config.actor_rollout_ref.rollout.mode = "async"
     config.actor_rollout_ref.rollout.tensor_model_parallel_size = 1
     config.actor_rollout_ref.rollout.prompt_length = 128
     config.actor_rollout_ref.rollout.response_length = 256

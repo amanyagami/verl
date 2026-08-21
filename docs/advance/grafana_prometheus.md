@@ -98,7 +98,6 @@ Start verl training with the following parameters configured:
 
 **Required Configuration:**
 
-- `actor_rollout_ref.rollout.mode="async"`
 - `actor_rollout_ref.rollout.disable_log_stats=False`
 - `actor_rollout_ref.rollout.prometheus.enable=True`
 
@@ -134,7 +133,6 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     -- python3 -m verl.trainer.main_ppo \
     data.return_raw_chat=${return_raw_chat} \
     actor_rollout_ref.rollout.name=${rollout_name} \
-    actor_rollout_ref.rollout.mode=${rollout_mode} \
     actor_rollout_ref.rollout.disable_log_stats=False \
     actor_rollout_ref.rollout.prometheus.enable=True
     ...
@@ -145,7 +143,6 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     -- python3 verl.experimental.fully_async_policy.fully_async_main \
     data.return_raw_chat=${return_raw_chat} \
     actor_rollout_ref.rollout.name=${rollout_name} \
-    actor_rollout_ref.rollout.mode=${rollout_mode} \
     actor_rollout_ref.rollout.disable_log_stats=False \
     actor_rollout_ref.rollout.prometheus.enable=True
     ...

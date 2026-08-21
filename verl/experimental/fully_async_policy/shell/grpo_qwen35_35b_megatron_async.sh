@@ -216,7 +216,6 @@ python -m verl.experimental.fully_async_policy.fully_async_main \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_aux_loss_coeff=0.01 \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_z_loss_coeff=0.001 \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_shared_expert_overlap=False \
-    actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.max_user_turns=${max_turns} \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${max_turns} \

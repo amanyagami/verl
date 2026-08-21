@@ -106,7 +106,6 @@ def run_training(
         "verl.trainer.main_ppo",
         # Rollout
         "actor_rollout_ref.rollout.name=vllm",
-        "actor_rollout_ref.rollout.mode=async",
         "actor_rollout_ref.rollout.full_determinism=true",
         f"actor_rollout_ref.rollout.seed={SEED}",
         "actor_rollout_ref.rollout.scheduling_policy=priority",

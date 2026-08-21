@@ -99,7 +99,6 @@ python3 -X faulthandler -m verl.experimental.fully_async_policy.fully_async_main
     actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
     actor_rollout_ref.rollout.standalone_gpu_memory_utilization=0.7 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=70000 \
-    actor_rollout_ref.rollout.mode=${rollout_mode} \
     actor_rollout_ref.rollout.calculate_log_probs=True \
     actor_rollout_ref.hybrid_engine=False \
     algorithm.use_kl_in_reward=False \

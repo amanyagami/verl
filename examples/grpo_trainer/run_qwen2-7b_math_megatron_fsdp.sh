@@ -12,7 +12,6 @@ TP=${TP:-4}
 PP=${PP:-1}
 GEN_TP=${GEN_TP:-4}
 
-rollout_mode=${rollout_mode:-async}
 return_raw_chat=${return_raw_chat:-True}
 USE_FUSED_KERNELS=${USE_FUSED_KERNELS:-False}
 
@@ -63,7 +62,6 @@ ROLLOUT=(
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2
     actor_rollout_ref.rollout.tensor_model_parallel_size=${GEN_TP}
     actor_rollout_ref.rollout.name=vllm
-    "actor_rollout_ref.rollout.mode=${rollout_mode}"
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4
     actor_rollout_ref.rollout.n=2
 )

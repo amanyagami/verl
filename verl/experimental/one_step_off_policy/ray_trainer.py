@@ -177,8 +177,6 @@ class OneStepOffRayTrainer(SeparateRayPPOTrainer):
         reward_loop_worker_handles = self.reward_loop_manager.reward_loop_workers if enable_agent_reward_loop else None
 
         # create async rollout manager and request scheduler
-        assert self.config.actor_rollout_ref.rollout.mode == "async"
-
         # Support custom AgentLoopManager via config
         manager_class_fqn = self.config.actor_rollout_ref.rollout.get("agent", {}).get("agent_loop_manager_class")
         if manager_class_fqn:

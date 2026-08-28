@@ -138,15 +138,19 @@ class FSDPModelMerger(BaseModelMerger):
             # the larger the FSDP world size is), it is left "replicated" rather than sharded,
             # and its local tensor can still be a *view* sharing storage with some other
             # buffer from the source checkpoint (e.g. another parameter's tensor, if the
-            # checkpoint writer packed multiple tensors into one contiguous allocation).
-            # Returning it unmodified propagates that storage aliasing into the merged
-            # state_dict, where two *unrelated* keys can end up pointing at the same
-            # underlying storage. `save_pretrained` treats same-storage tensors as tied
-            # weights and silently drops all but one when writing sharded safetensors files,
-            # corrupting the merged checkpoint (see
-            # https://github.com/verl-project/verl/issues/6259). Clone to guarantee every key
-            # in the merged state_dict owns independent storage; legitimate weight tying is
-            # handled explicitly and separately via `drop_tied_target_keys`.
+            # checkpoint writer packed multiple tensors into one contiguous allocation, see
+            # https://github.com/verl-project/verl/issues/6259). Returning it unmodified
+            # propagates that storage aliasing into the merged state_dict, so two *unrelated*
+            # keys can end up sharing one underlying storage. `transformers.save_pretrained`
+            # treats two keys that are non-overlapping views of the same storage as safe (it
+            # clones them apart before writing), and treats two keys that are the *exact* same
+            # tensor object as an unintentional tie and raises -- but relying on that behavior
+            # to paper over the aliasing is version-dependent and keeps the whole shared source
+            # buffer alive for the rest of the merge in the meantime. Clone here so the
+            # merged state_dict never depends on that behavior at all: every key owns
+            # independent storage, and the (potentially large) shared buffer this replica was
+            # sliced from can be freed once merging is done. Legitimate weight tying is handled
+            # explicitly and separately via `drop_tied_target_keys`, not by aliased storage.
             return tensors[0].clone()
         elif placement.is_partial():
             raise NotImplementedError("Partial placement is not supported yet")

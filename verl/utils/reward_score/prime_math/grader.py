@@ -92,8 +92,10 @@ This logic is largely copied from the Hendrycks' MATH release (math_equivalence)
 - https://github.com/openai/prm800k
 """
 
+import ast
 import contextlib
 import math
+import operator
 import re
 from math import isclose
 
@@ -147,6 +149,54 @@ def handle_base(x) -> str:
     return x
 
 
+# Allowlist of AST nodes for the safe evaluator below. Everything else
+# (Name, Call, Attribute, Subscript, comprehensions, ...) is rejected.
+_SAFE_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_SAFE_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+
+def safe_arithmetic_eval(expr: str):
+    """Safely evaluate an arithmetic / list / tuple expression over numeric literals.
+
+    This is the security-hardened replacement for ``eval()`` in the math grader. The
+    grader compares model-authored answer text, so ``eval()`` here is arbitrary code
+    execution driven by the policy's own output (CVE-2026-6878 / GHSA-h57c-v2v3-5v3v):
+    a single poisoned sample can run code in the reward worker and even monkeypatch
+    grading so every later sample scores full reward.
+
+    Only numeric constants, unary ``+``/``-``, binary ``+ - * / // % **``, parentheses,
+    and list/tuple literals of those are permitted. Any function call, name, attribute
+    access, or other construct raises ``ValueError``, so answer text can never execute
+    code. This is an allowlist, not a denylist, so obfuscation tricks (e.g. ``chr(95)``)
+    cannot bypass it.
+    """
+
+    def _eval(node):
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, int | float | complex) and not isinstance(node.value, bool):
+                return node.value
+            raise ValueError(f"disallowed constant: {node.value!r}")
+        if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+            return _SAFE_BINOPS[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARYOPS:
+            return _SAFE_UNARYOPS[type(node.op)](_eval(node.operand))
+        if isinstance(node, ast.List):
+            return [_eval(elt) for elt in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(_eval(elt) for elt in node.elts)
+        raise ValueError(f"disallowed expression: {type(node).__name__}")
+
+    return _eval(ast.parse(expr, mode="eval").body)
+
+
 def handle_pi(string, pi):
     if isinstance(string, str) and "\\pi" in string:
         # Find the first occurrence of "\pi"
@@ -164,9 +214,11 @@ def handle_pi(string, pi):
             # Find the next occurrence of "\pi"
             idx = string.find("\\pi", idx + 1)
 
-        # Evaluate the expression using eval() function
+        # Evaluate the substituted arithmetic expression safely (see
+        # safe_arithmetic_eval). On any failure the original string is kept, which
+        # makes a non-numeric answer fall through to a not-correct comparison.
         with contextlib.suppress(Exception):
-            string = eval(string)
+            string = safe_arithmetic_eval(string)
 
     return string
 
@@ -296,9 +348,15 @@ def math_equal(
         except Exception:
             pass
     elif r"\begin{pmatrix}" in reference and prediction.startswith("[") and prediction.endswith("]"):
-        if isinstance(eval(prediction), list):
+        # Parse the bracketed prediction as a list literal without eval(): the
+        # prediction is model-authored text (CVE-2026-6878). safe_arithmetic_eval
+        # accepts list/tuple/number literals and rejects anything executable.
+        try:
+            pred_matrix = safe_arithmetic_eval(prediction)
+        except Exception:
+            pred_matrix = None
+        if isinstance(pred_matrix, list):
             try:
-                pred_matrix = eval(prediction)
                 # ref_matrix_items = reference.split()[1:-1:2]
                 ref_matrix_items = (
                     reference.removeprefix(r"\\begin{pmatrix}")

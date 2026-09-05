@@ -149,6 +149,44 @@ def handle_base(x) -> str:
     return x
 
 
+# Resource bounds for the safe evaluator. Refusing code execution is not sufficient on
+# its own: the grader runs on model-authored text inside a long-lived reward worker, so
+# an expression that merely takes forever is still a denial of service -- and unlike a
+# rejected expression, a hang is not something the callers' ``except Exception`` can
+# recover from. Python integers are arbitrary precision, so a right-associated tower such
+# as ``9**9**9**9`` would try to build an astronomically large number before returning.
+# Bound the input, the tree, and the size of every intermediate value.
+_MAX_EXPR_CHARS = 10_000
+_MAX_AST_NODES = 10_000
+_MAX_AST_DEPTH = 50
+_MAX_POW_EXPONENT = 1024
+_MAX_INT_BITS = 4096
+
+
+def _check_int_size(value):
+    """Reject an integer too large to keep manipulating cheaply."""
+    if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > _MAX_INT_BITS:
+        raise ValueError("intermediate value is too large")
+    return value
+
+
+def _safe_pow(base, exponent):
+    """``operator.pow`` with the result size bounded *before* the result is computed.
+
+    Checking afterwards would be too late: the cost of ``a ** b`` is paid during the
+    call, so the projected size has to be rejected up front.
+    """
+    if isinstance(base, complex) or isinstance(exponent, complex):
+        raise ValueError("complex exponentiation is not supported")
+    if abs(exponent) > _MAX_POW_EXPONENT:
+        raise ValueError(f"exponent is too large: {exponent!r}")
+    if isinstance(base, int) and isinstance(exponent, int) and exponent > 0:
+        # `a ** b` occupies roughly `b * log2(|a|)` bits; refuse before allocating it.
+        if base.bit_length() * exponent > _MAX_INT_BITS:
+            raise ValueError("exponentiation result is too large")
+    return operator.pow(base, exponent)
+
+
 # Allowlist of AST nodes for the safe evaluator below. Everything else
 # (Name, Call, Attribute, Subscript, comprehensions, ...) is rejected.
 _SAFE_BINOPS = {
@@ -158,7 +196,7 @@ _SAFE_BINOPS = {
     ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv,
     ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
+    ast.Pow: _safe_pow,
 }
 _SAFE_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
@@ -177,21 +215,39 @@ def safe_arithmetic_eval(expr: str):
     access, or other construct raises ``ValueError``, so answer text can never execute
     code. This is an allowlist, not a denylist, so obfuscation tricks (e.g. ``chr(95)``)
     cannot bypass it.
+
+    Evaluation is also bounded, so the security boundary does not simply move from remote
+    code execution to resource exhaustion: the input length, node count, nesting depth,
+    exponent magnitude, and the size of every intermediate integer are all capped, and
+    exceeding any of them raises ``ValueError`` rather than burning the reward worker.
     """
 
-    def _eval(node):
+    if len(expr) > _MAX_EXPR_CHARS:
+        raise ValueError("expression is too long")
+
+    remaining_nodes = _MAX_AST_NODES
+
+    def _eval(node, depth=0):
+        nonlocal remaining_nodes
+        remaining_nodes -= 1
+        if remaining_nodes < 0:
+            raise ValueError("expression has too many nodes")
+        if depth > _MAX_AST_DEPTH:
+            raise ValueError("expression is nested too deeply")
+
         if isinstance(node, ast.Constant):
             if isinstance(node.value, int | float | complex) and not isinstance(node.value, bool):
-                return node.value
+                return _check_int_size(node.value)
             raise ValueError(f"disallowed constant: {node.value!r}")
         if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
-            return _SAFE_BINOPS[type(node.op)](_eval(node.left), _eval(node.right))
+            left, right = _eval(node.left, depth + 1), _eval(node.right, depth + 1)
+            return _check_int_size(_SAFE_BINOPS[type(node.op)](left, right))
         if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARYOPS:
-            return _SAFE_UNARYOPS[type(node.op)](_eval(node.operand))
+            return _check_int_size(_SAFE_UNARYOPS[type(node.op)](_eval(node.operand, depth + 1)))
         if isinstance(node, ast.List):
-            return [_eval(elt) for elt in node.elts]
+            return [_eval(elt, depth + 1) for elt in node.elts]
         if isinstance(node, ast.Tuple):
-            return tuple(_eval(elt) for elt in node.elts)
+            return tuple(_eval(elt, depth + 1) for elt in node.elts)
         raise ValueError(f"disallowed expression: {type(node).__name__}")
 
     return _eval(ast.parse(expr, mode="eval").body)

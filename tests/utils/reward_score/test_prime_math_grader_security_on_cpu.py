@@ -26,6 +26,7 @@ pin down that:
 """
 
 import math
+import time
 
 import pytest
 
@@ -134,3 +135,75 @@ class TestLegitimateGradingUnchanged:
     def test_pi_and_fraction_equality(self):
         assert math_equal(r"3\pi", "9.42477796") is True
         assert math_equal("0.5", "0.5") is True
+
+
+class TestResourceBounds:
+    """The evaluator must not turn RCE into a CPU/memory denial of service.
+
+    ``safe_arithmetic_eval`` runs on model-authored text in a long-lived reward worker,
+    and its callers only guard with ``except Exception`` -- which a hang or an OOM does
+    not raise. So an expression that is merely ruinously expensive has to be *rejected*,
+    not merely survived.
+    """
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "9**9**9**9",  # right-associated tower: the classic int-blowup payload
+            "9**9**9",
+            "2**999999999",
+            "10**100000",
+            "(10**1000)**1000",
+        ],
+    )
+    def test_rejects_exponent_blowup(self, expr):
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval(expr)
+
+    def test_exponent_blowup_is_rejected_promptly(self):
+        """Rejection must come from the size check, not from actually computing it."""
+        start = time.monotonic()
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval("9**9**9**9")
+        assert time.monotonic() - start < 1.0
+
+    def test_rejects_oversized_intermediate_from_multiplication(self):
+        """Bounding only ``**`` would leave repeated multiplication as a way through."""
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval("(2**4000) * (2**4000)")
+
+    def test_rejects_overlong_expression(self):
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval("1+" * 20_000 + "1")
+
+    def test_rejects_too_many_nodes(self):
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval("1+" * 9_000 + "1")
+
+    def test_rejects_deep_nesting(self):
+        with pytest.raises(ValueError):
+            safe_arithmetic_eval("-" * 100 + "1")
+
+    def test_bounds_do_not_reject_realistic_answers(self):
+        """The limits must sit far above anything a real answer contains."""
+        assert safe_arithmetic_eval("2**10") == 1024
+        assert safe_arithmetic_eval("2**0.5") == pytest.approx(math.sqrt(2))
+        assert safe_arithmetic_eval("-2**3") == -8
+        assert safe_arithmetic_eval("3.14159*2") == pytest.approx(3.14159 * 2)
+        assert safe_arithmetic_eval("[1, 2, 3, 4, 5, 6, 7, 8, 9]") == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    def test_grader_sinks_survive_a_blowup_payload(self):
+        """Both eval() sinks must reject the payload rather than hang.
+
+        ``handle_pi`` substitutes the numeric pi before evaluating and suppresses any
+        failure, so a rejected expression leaves the substituted *string* in place. That
+        is the intended fallthrough: a non-numeric result simply grades as not correct.
+        """
+        start = time.monotonic()
+
+        result = handle_pi(r"9**9**9**9\pi", math.pi)
+        assert isinstance(result, str)
+        assert result == "9**9**9**9*" + repr(math.pi)
+
+        assert math_equal("[9**9**9**9]", r"\begin{pmatrix}1\end{pmatrix}") is False
+        assert time.monotonic() - start < 2.0
